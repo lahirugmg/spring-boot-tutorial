@@ -1,0 +1,25 @@
+# Illustrates how a real prod profile tightens things down.
+app:
+  max-tasks: 5000
+  feature:
+    request-timing-enabled: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+
+server:
+  error:
+    # Never leak stack traces or internal messages to clients.
+    include-stacktrace: never
+    include-message: never
+
+logging:
+  level:
+    root: WARN
+    com.learning.coreweb: INFO

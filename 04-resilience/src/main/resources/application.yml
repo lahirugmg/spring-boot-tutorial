@@ -1,0 +1,170 @@
+server:
+  port: 8084
+
+spring:
+  application:
+    name: resilience
+
+  data:
+    redis:
+      host: localhost
+      port: 56379          # shifted, see docker-compose.yml
+      timeout: 2s
+      lettuce:
+        pool:
+          enabled: true
+          max-active: 8
+          max-idle: 8
+          min-idle: 2
+      # INTERVIEW: Lettuce vs Jedis? Lettuce is the Boot default: netty-based, and its
+      # connections are thread-safe so one shared connection serves many threads. Jedis
+      # connections are NOT thread-safe and need a pool per thread.
+
+  cache:
+    type: redis
+
+  task:
+    execution:
+      # Applies to the AUTO-CONFIGURED executor. This app defines its own in AsyncConfig,
+      # which takes precedence — these values are here to show what you would tune if you
+      # relied on Boot's default.
+      pool:
+        core-size: 4
+        max-size: 16
+        queue-capacity: 50
+      thread-name-prefix: boot-async-
+    scheduling:
+      pool:
+        # THE DEFAULT IS 1. A single slow @Scheduled job would otherwise delay every other
+        # scheduled job in the application. Always raise this if you have more than one.
+        size: 4
+      thread-name-prefix: sched-
+
+  threads:
+    virtual:
+      # Java 21 virtual threads. Flip to true and Tomcat serves each request on a virtual
+      # thread, and SimpleAsyncTaskExecutor becomes cheap. Best suited to IO-bound work.
+      # Caveat worth knowing: a synchronized block PINS a virtual thread to its carrier —
+      # prefer ReentrantLock in hot paths.
+      enabled: false
+
+app:
+  upstream:
+    # The flaky "third party" is hosted by this same app, so the client calls back into it.
+    base-url: http://localhost:8084
+
+# =====================================================================================
+# RESILIENCE4J
+# =====================================================================================
+resilience4j:
+  circuitbreaker:
+    # ---------------------------------------------------------------------------------
+    # ASPECT ORDER. Lower value = higher precedence = further OUT.
+    #
+    # The DEFAULT is Retry(CircuitBreaker(...)) — Retry outermost. That is wrong for most
+    # services for two reasons:
+    #   1. each retry attempt is recorded by the breaker separately, so one logical call
+    #      counts as 3 failures and the circuit opens ~3x sooner than configured
+    #   2. a fallbackMethod on the inner annotation converts the failure into a normal
+    #      return value, so the outer Retry sees success and NEVER RETRIES
+    #
+    # Inverting it — breaker outside, retry inside — is Resilience4j's own recommendation
+    # for Spring Boot 3. See the walkthrough in PricingClient.
+    # ---------------------------------------------------------------------------------
+    circuitBreakerAspectOrder: 1
+    configs:
+      default:
+        # COUNT_BASED: decide using the last N calls. TIME_BASED would use the last N
+        # seconds instead — better for low, bursty traffic where N calls take a long time
+        # to accumulate.
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: 10
+        # Do not judge until there is enough evidence. Without this, the first single
+        # failure is a 100% failure rate and the breaker trips instantly.
+        minimumNumberOfCalls: 5
+        failureRateThreshold: 50           # percent
+        waitDurationInOpenState: 5s
+        permittedNumberOfCallsInHalfOpenState: 3
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+        # A call slower than this counts as a failure even if it eventually succeeds —
+        # protects against the "slow death" that pure error-rate breakers miss entirely.
+        slowCallRateThreshold: 80
+        slowCallDurationThreshold: 2s
+        registerHealthIndicator: true
+        recordExceptions:
+          - org.springframework.web.client.RestClientException
+          - java.io.IOException
+          - java.util.concurrent.TimeoutException
+        # ignoreExceptions are NOT counted as failures. Business exceptions belong here:
+        # a 404 from upstream means "not found", not "upstream is unhealthy", and letting
+        # it trip the breaker takes down a perfectly working dependency.
+        ignoreExceptions:
+          - java.lang.IllegalArgumentException
+    instances:
+      pricingApi:
+        baseConfig: default
+
+  retry:
+    retryAspectOrder: 2                    # inside the circuit breaker — see above
+    configs:
+      default:
+        maxAttempts: 3                     # 1 initial + 2 retries
+        waitDuration: 200ms
+        # EXPONENTIAL BACKOFF + JITTER. Backoff stops you hammering a struggling service;
+        # jitter (randomisation) stops every client retrying in lockstep and creating a
+        # synchronised thundering herd. Fixed-interval retry from many clients is how a
+        # brief blip becomes a sustained outage.
+        enableExponentialBackoff: true
+        exponentialBackoffMultiplier: 2
+        enableRandomizedWait: true
+        randomizedWaitFactor: 0.5
+        retryExceptions:
+          - org.springframework.web.client.RestClientException
+          - java.io.IOException
+        # NEVER retry a non-idempotent operation blindly. A retried POST can charge a card
+        # twice. Retry GETs freely; for writes use an idempotency key.
+        ignoreExceptions:
+          - java.lang.IllegalArgumentException
+    instances:
+      pricingApi:
+        baseConfig: default
+
+  ratelimiter:
+    instances:
+      pricingApi:
+        limitForPeriod: 5                  # 5 calls...
+        limitRefreshPeriod: 10s            # ...per 10 seconds
+        timeoutDuration: 0                 # do not block waiting for a permit; fail fast
+        registerHealthIndicator: false
+
+  bulkhead:
+    instances:
+      pricingApi:
+        maxConcurrentCalls: 5
+        maxWaitDuration: 0
+
+  timelimiter:
+    instances:
+      pricingApi:
+        timeoutDuration: 3s
+        cancelRunningFuture: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,caches,circuitbreakers,circuitbreakerevents,ratelimiters,scheduledtasks
+  endpoint:
+    health:
+      show-details: always
+  health:
+    circuitbreakers:
+      enabled: true
+
+logging:
+  level:
+    "[com.learning.resilience]": DEBUG
+    # Uncomment to watch every cache hit/miss decision.
+    # "[org.springframework.cache]": TRACE
+    # Uncomment for circuit breaker state transitions.
+    # "[io.github.resilience4j]": DEBUG

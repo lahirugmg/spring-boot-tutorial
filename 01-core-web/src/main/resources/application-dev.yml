@@ -1,0 +1,12 @@
+# Active by default (spring.profiles.default=dev).
+# Run another profile with:  --spring.profiles.active=prod
+app:
+  max-tasks: 25
+  feature:
+    request-timing-enabled: true
+
+logging:
+  level:
+    org.springframework.web: DEBUG
+    # Shows exactly which handler method matched a request — invaluable when debugging 404s.
+    org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping: TRACE

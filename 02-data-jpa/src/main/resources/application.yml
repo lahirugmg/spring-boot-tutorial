@@ -1,0 +1,97 @@
+server:
+  port: 8082
+
+spring:
+  application:
+    name: data-jpa
+
+  datasource:
+    # Host port 55432 (not 5432) so this stack never collides with another Postgres you
+    # may already be running. See docker-compose.yml.
+    url: jdbc:postgresql://localhost:55432/appdb
+    username: app
+    password: app
+    hikari:
+      # INTERVIEW: "How do you size a connection pool?"
+      # Bigger is NOT better. A pool larger than the DB can service just moves queueing
+      # from your app into the database. The HikariCP rule of thumb is
+      #   connections = ((core_count * 2) + effective_spindle_count)
+      # which for most services lands around 10. Start there and measure.
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 3000     # fail fast rather than pile up threads
+      pool-name: catalog-pool
+      # Must be shorter than the DB's idle timeout and any network idle timeout.
+      max-lifetime: 600000
+
+  jpa:
+    # ---------------------------------------------------------------------------------
+    # THE SINGLE MOST IMPORTANT LINE IN THIS FILE.
+    #
+    # Boot enables open-session-in-view BY DEFAULT and logs a warning about it. It keeps
+    # the Hibernate session (and a DB connection) open for the entire HTTP request so lazy
+    # loading "just works" during JSON serialisation.
+    #
+    # That convenience is why so many services hold connections for the whole request and
+    # discover their N+1 problems only under production load. Turn it OFF and fix the
+    # fetch plans explicitly — which is what module 02 is about.
+    # ---------------------------------------------------------------------------------
+    open-in-view: false
+
+    hibernate:
+      # validate = Hibernate checks the entity mappings against the schema Flyway built and
+      # refuses to start on drift. NEVER use `update` outside a scratch database, and never
+      # `create-drop` anywhere you care about.
+      ddl-auto: validate
+
+    properties:
+      hibernate:
+        # Powers QueryCounter. Small runtime cost — dev and test only.
+        generate_statistics: true
+        format_sql: true
+
+        # JDBC batching. Only effective because the entities use SEQUENCE ids; with
+        # IDENTITY, Hibernate must insert row-by-row and these settings do nothing.
+        jdbc:
+          batch_size: 30
+          # Postgres needs this to report per-row results for batched statements,
+          # which optimistic locking (@Version) depends on.
+          batch_versioned_data: true
+        order_inserts: true
+        order_updates: true
+
+        # FIX 4 for N+1, globally. Left OFF so the naive demos show a real N+1.
+        # Turn it on and re-run /api/demo/fetch-strategies to watch the counts collapse:
+        #   ./mvnw -pl 02-data-jpa spring-boot:run \
+        #     -Dspring-boot.run.jvmArguments="-Dspring.jpa.properties.hibernate.default_batch_fetch_size=25"
+        # default_batch_fetch_size: 25
+
+  flyway:
+    enabled: true
+    # Fail loudly if someone edited an already-applied migration.
+    validate-on-migrate: true
+    baseline-on-migrate: false
+
+  jackson:
+    serialization:
+      write-dates-as-timestamps: false
+    default-property-inclusion: non_null
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,flyway,beans,configprops
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    "[com.learning.datajpa]": DEBUG
+    # Uncomment to watch every statement Hibernate issues — the fastest way to SEE N+1.
+    # "[org.hibernate.SQL]": DEBUG
+    # Shows the bound parameter values alongside the SQL.
+    # "[org.hibernate.orm.jdbc.bind]": TRACE
+    # Logs a summary (queries, entity loads, collection fetches) at the end of each session.
+    # "[org.hibernate.stat]": DEBUG

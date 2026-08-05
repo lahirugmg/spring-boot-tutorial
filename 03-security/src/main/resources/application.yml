@@ -1,0 +1,76 @@
+server:
+  port: 8083
+
+spring:
+  application:
+    name: security
+
+  datasource:
+    url: jdbc:postgresql://localhost:55432/appdb
+    username: app
+    password: app
+
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        # Hibernate must look in the same schema Flyway built, or `validate` fails with
+        # "missing table [app_user]".
+        default_schema: security
+
+  flyway:
+    enabled: true
+    # ---------------------------------------------------------------------------------
+    # SCHEMA OWNERSHIP. This module shares the `appdb` database with module 02, and each
+    # module owns a separate SCHEMA:
+    #     module 02 -> public
+    #     module 03 -> security
+    #
+    # The first attempt here used the public schema with only a renamed history table, and
+    # Flyway refused to start:
+    #
+    #     Found non-empty schema(s) "public" but no schema history table.
+    #     Use baseline() or set baselineOnMigrate to true.
+    #
+    # That is Flyway protecting you: an existing schema it has no history for might be
+    # anything, and blindly applying V1 could destroy it. `baseline-on-migrate: true` would
+    # silence it, but silencing a safety check is the wrong instinct — the real problem was
+    # two independent migration streams pointed at one schema.
+    #
+    # INTERVIEW: this is the standard answer for "how do several services share a database?"
+    # They don't share tables; each owns a schema (better still, its own database), and no
+    # service reads another's tables directly.
+    # ---------------------------------------------------------------------------------
+    schemas: security
+    default-schema: security
+    create-schemas: true
+
+app:
+  jwt:
+    # DEMO ONLY. In production this comes from a secret manager / env var, is at least 256
+    # bits of real entropy, and is rotated. Committing a signing key means anyone with repo
+    # access can mint valid tokens for any user.
+    # Override at runtime with:  --app.jwt.secret=...  or  APP_JWT_SECRET=...
+    secret: "change-me-this-is-a-demo-only-hs256-signing-key-32b+"
+    access-token-ttl: 15m
+    issuer: spring-boot-interview-prep
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: when-authorized
+
+logging:
+  level:
+    "[com.learning.security]": DEBUG
+    # Uncomment to print the resolved filter chain at startup — genuinely the fastest way
+    # to understand what Spring Security is doing, and great preparation for the
+    # "walk me through the filter chain" question.
+    # "[org.springframework.security]": DEBUG
+    # "[org.springframework.security.web.FilterChainProxy]": DEBUG

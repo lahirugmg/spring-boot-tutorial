@@ -1,0 +1,201 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+      The parent is spring-boot-starter-parent. Interview talking point:
+      it does NOT bring in any dependencies itself. It gives you
+        1. dependencyManagement (via spring-boot-dependencies) -> versionless <dependency> tags
+        2. pluginManagement    -> sensible defaults for surefire/jar/spring-boot-maven-plugin
+        3. properties          -> java.version, resource filtering for application.yml
+      If you cannot use it as a parent (corporate parent pom), import spring-boot-dependencies
+      as <scope>import</scope> <type>pom</type> in dependencyManagement instead.
+    -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.5.3</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.learning</groupId>
+    <artifactId>spring-boot-interview-prep</artifactId>
+    <version>1.0.0</version>
+    <packaging>pom</packaging>
+    <name>Spring Boot Interview Prep</name>
+    <description>Hands-on, runnable Spring Boot modules for interview preparation</description>
+
+    <properties>
+        <java.version>21</java.version>
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!--
+          Overrides the version spring-boot-dependencies manages (1.20.6).
+
+          WHY: Colima ships a recent Docker Engine (29.x) whose minimum supported API
+          version is 1.44. The docker-java client bundled with Testcontainers 1.20.x
+          negotiates 1.32 and the daemon rejects it outright:
+
+              Status 400: client version 1.32 is too old.
+              Minimum supported API version is 1.44
+
+          Testcontainers 1.21.x negotiates a modern API version and works.
+
+          Fallback if you are pinned to an older Testcontainers: export DOCKER_API_VERSION
+          to force the client version, e.g. `export DOCKER_API_VERSION=1.44`.
+        -->
+        <testcontainers.version>1.21.3</testcontainers.version>
+        <resilience4j.version>2.3.0</resilience4j.version>
+        <springdoc.version>2.8.6</springdoc.version>
+    </properties>
+
+    <modules>
+        <module>01-core-web</module>
+        <module>02-data-jpa</module>
+        <module>03-security</module>
+        <module>04-resilience</module>
+        <module>05-messaging</module>
+    </modules>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.github.resilience4j</groupId>
+                <artifactId>resilience4j-spring-boot3</artifactId>
+                <version>${resilience4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springdoc</groupId>
+                <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+                <version>${springdoc.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- Every module gets these: they are the baseline of any real Boot service. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-devtools</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!--
+              ============================================================================
+              COLIMA + TESTCONTAINERS: the two settings that make `./mvnw verify` just work
+              ============================================================================
+              Both are applied to surefire AND failsafe below, so no shell setup is needed.
+
+              1. -Dapi.version=1.44
+                 Colima runs a recent Docker Engine (29.x) whose MINIMUM supported API
+                 version is 1.44. The docker-java client inside Testcontainers defaults to
+                 API 1.32, and the daemon rejects the handshake outright:
+
+                     Status 400: client version 1.32 is too old.
+                     Minimum supported API version is 1.44
+
+                 Symptom you would otherwise see: "Could not find a valid Docker
+                 environment", which sends everyone hunting for the wrong problem.
+                 NOTE it is the `api.version` SYSTEM PROPERTY that docker-java reads —
+                 the DOCKER_API_VERSION environment variable is NOT consulted here.
+
+              2. TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
+                 Testcontainers talks to the daemon over DOCKER_HOST
+                 (unix://$HOME/.colima/default/docker.sock on the host), but Ryuk — the
+                 sidecar that reaps leftover containers — runs INSIDE the VM and must
+                 bind-mount the socket at its in-VM path. Without this, Ryuk fails to start
+                 and every container launch dies with ContainerLaunchException.
+              ============================================================================
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <systemPropertyVariables>
+                        <api.version>1.44</api.version>
+                    </systemPropertyVariables>
+                    <environmentVariables>
+                        <TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE>/var/run/docker.sock</TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE>
+                    </environmentVariables>
+                </configuration>
+            </plugin>
+
+            <!--
+              INTERVIEW: "How do you separate unit tests from integration tests in Maven?"
+
+                surefire (runs at `test` phase)   -> **/*Test.java, **/Test*.java, **/*Tests.java
+                failsafe (runs at `verify` phase) -> **/*IT.java, **/IT*.java, **/*ITCase.java
+
+              The important difference is failure semantics. Surefire fails the build
+              immediately. Failsafe runs integration-test, then post-integration-test
+              (so containers/servers get torn down), and only *then* fails the build in the
+              verify goal. That guarantees cleanup even when a test fails.
+
+              Practical upshot in this repo:
+                ./mvnw test      -> fast; unit + slice tests only, no Docker needed
+                ./mvnw verify    -> everything, including Testcontainers-backed *IT classes
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <!-- Same Colima settings as surefire; see the comment above. -->
+                    <systemPropertyVariables>
+                        <api.version>1.44</api.version>
+                    </systemPropertyVariables>
+                    <environmentVariables>
+                        <TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE>/var/run/docker.sock</TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE>
+                    </environmentVariables>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-maven-plugin</artifactId>
+                    <configuration>
+                        <excludes>
+                            <exclude>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                            </exclude>
+                        </excludes>
+                    </configuration>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+</project>

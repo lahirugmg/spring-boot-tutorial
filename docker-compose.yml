@@ -1,0 +1,127 @@
+# Backing services for the learning modules, run on Colima.
+#
+# Everything is grouped with compose *profiles* so you only boot what a module needs:
+#   make db      -> postgres + adminer   (module 02, 03)
+#   make cache   -> redis                (module 04)
+#   make mq      -> kafka + kafka-ui     (module 05)
+#   make infra   -> all of the above
+#
+# Nothing here is required for module 01 (it runs fully in-memory).
+#
+# PORTS ARE DELIBERATELY NON-STANDARD (55432 / 56379 / 59092) so this stack never fights
+# with anything already running on your machine — you already have a pgvector Postgres on
+# 5432. Container-to-container traffic still uses the normal ports; only the host-side
+# mappings are shifted.
+
+name: sb-interview
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sb-postgres
+    profiles: ["db", "all"]
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: appdb
+      # Speeds up local restarts; never do this in production.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    ports:
+      - "55432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready is the canonical readiness probe; -U avoids "role root does not exist".
+      test: ["CMD-SHELL", "pg_isready -U app -d appdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  adminer:
+    image: adminer:4
+    container_name: sb-adminer
+    profiles: ["db", "all"]
+    ports:
+      - "8090:8080"
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+      ADMINER_DESIGN: dracula
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    container_name: sb-redis
+    profiles: ["cache", "all"]
+    ports:
+      - "56379:6379"
+    # appendonly gives durability across container restarts so cache demos survive `make down`.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  kafka:
+    # Apache's own image, KRaft mode -> no ZooKeeper. Multi-arch, works on Apple Silicon.
+    image: apache/kafka:3.9.0
+    container_name: sb-kafka
+    profiles: ["mq", "all"]
+    ports:
+      - "59092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # Single-node quorum: the controller votes for itself over the loopback interface.
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      # Bind with an EMPTY host (`://:9092`), not 0.0.0.0. Kafka copies unadvertised
+      # listeners into advertised.listeners and then rejects the result with
+      #   "advertised.listeners cannot use the nonroutable meta-address 0.0.0.0"
+      # The empty form means "all interfaces" without poisoning the advertised set.
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,INTERNAL://:19092
+      # Two advertised listeners: PLAINTEXT for the host, INTERNAL for other containers.
+      # The advertised host:port must be what the CLIENT dials, not what the broker binds —
+      # so the host listener advertises 59092 (the published port) even though the broker
+      # binds 9092 inside the container. Getting this wrong is the #1 cause of
+      # "connection refused" / metadata-loop errors from a client.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:59092,INTERNAL://kafka:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      # Single-node dev cluster: replication factor must be 1 or topics never become available.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 20s
+
+  kafka-ui:
+    image: kafbat/kafka-ui:latest
+    container_name: sb-kafka-ui
+    profiles: ["mq", "all"]
+    ports:
+      - "8091:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:19092
+      DYNAMIC_CONFIG_ENABLED: "true"
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  redisdata:
