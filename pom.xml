@@ -52,11 +52,11 @@
     </properties>
 
     <modules>
-        <module>01-core-web</module>
-        <module>02-data-jpa</module>
-        <module>03-security</module>
-        <module>04-resilience</module>
-        <module>05-messaging</module>
+        <module>lessons/01-core-web</module>
+        <module>lessons/02-data-jpa</module>
+        <module>lessons/03-security</module>
+        <module>lessons/04-resilience</module>
+        <module>lessons/05-messaging</module>
     </modules>
 
     <dependencyManagement>

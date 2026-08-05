@@ -81,24 +81,24 @@ test: ## Run every test (Testcontainers modules need Colima up)
 verify: colima-up ## Full build + all tests including integration
 	./mvnw verify
 
-## ---------- Run a module ----------
+## ---------- Run a lesson ----------
 # Each app binds its own port so you can run several at once.
 
 .PHONY: run-01 run-02 run-03 run-04 run-05
-run-01: ## Run module 01 core-web        -> http://localhost:8081
-	./mvnw -pl 01-core-web spring-boot:run
+run-01: ## Run lesson 01 core-web        -> http://localhost:8081
+	./mvnw -pl lessons/01-core-web spring-boot:run
 
-run-02: db ## Run module 02 data-jpa     -> http://localhost:8082
-	./mvnw -pl 02-data-jpa spring-boot:run
+run-02: db ## Run lesson 02 data-jpa     -> http://localhost:8082
+	./mvnw -pl lessons/02-data-jpa spring-boot:run
 
-run-03: db ## Run module 03 security     -> http://localhost:8083
-	./mvnw -pl 03-security spring-boot:run
+run-03: db ## Run lesson 03 security     -> http://localhost:8083
+	./mvnw -pl lessons/03-security spring-boot:run
 
-run-04: cache ## Run module 04 resilience -> http://localhost:8084
-	./mvnw -pl 04-resilience spring-boot:run
+run-04: cache ## Run lesson 04 resilience -> http://localhost:8084
+	./mvnw -pl lessons/04-resilience spring-boot:run
 
-run-05: mq ## Run module 05 messaging     -> http://localhost:8085
-	./mvnw -pl 05-messaging spring-boot:run
+run-05: mq ## Run lesson 05 messaging     -> http://localhost:8085
+	./mvnw -pl lessons/05-messaging spring-boot:run
 
 .PHONY: help
 help:
